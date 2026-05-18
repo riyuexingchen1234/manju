@@ -8,5 +8,5 @@ export const getRecentHistory = (limit = 5) => {
 
 // 获取全部历史记录（分页，用于弹窗）
 export const getHistoryList = (page = 1 ,size = 20) => {
-    return request.get("history/list",{params:{page,size}})
+    return request.get("/history/list",{params:{page,size}})
 }
