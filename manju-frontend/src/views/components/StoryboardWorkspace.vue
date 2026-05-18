@@ -225,10 +225,19 @@ import { generateKeyframe as generateKeyframeApi } from '@/api/keyframe'
 import { createVideoTask, queryVideoTask } from '@/api/video'
 import { loadLocalStoryboards, saveLocalStoryboards } from '@/utils/storage'
 
+const debounce = (fn, delay) => {  
+  let timer = null  
+  return (...args) => {  
+    clearTimeout(timer)  
+    timer = setTimeout(() => fn(...args), delay)  
+  }  
+}
+
 const props = defineProps({
   storyboards: { type: Array, default: () => [] },
   characters: { type: Array, default: () => [] },  // 角色列表，用于下拉选择
-  characterImages: { type: Object, default: () => ({}) }
+  characterImages: { type: Object, default: () => ({}) },
+  styleDeclaration: { type: String, default: '' } 
 })
 
 const emit = defineEmits(['keyframe-generated', 'video-generated', 'update:storyboards'])
@@ -249,17 +258,18 @@ const previewPlayerRef = ref(null)
 let previewIndex = 0
 let previewVideoList = []
 let isPreviewing = false   // 防止重复调用
+let isUnmounted = false
 // 视频轮询interval引用，用于组件卸载时清理
 const pollIntervals = {}
 
 const generateId = () => Date.now() + '-' + Math.random().toString(36).substr(2, 6)
 
 // 组件卸载时清理所有interval
-onBeforeUnmount(() => {
-  // 清理所有视频轮询interval
-  Object.values(pollIntervals).forEach(intervalId => {
-    if (intervalId) clearInterval(intervalId)
-  })
+onBeforeUnmount(() => {  
+  isUnmounted = true   // 新增  
+  Object.values(pollIntervals).forEach(timeoutId => {  
+    if (timeoutId) clearTimeout(timeoutId)  
+  })  
 })
 
 // 防递归标志
@@ -312,15 +322,14 @@ const initData = () => {
 }
 
 // 监听本地分镜变化 - 只保存到localStorage，不向上emit（防止编辑时数据被覆盖）
-watch(localStoryboards, (newVal) => {
-  saveLocalStoryboards(newVal)
+const saveDebounced = debounce((val) => saveLocalStoryboards(val), 500)  
+watch(localStoryboards, (newVal) => {  
+  saveDebounced(newVal)  
 }, { deep: true })
 
 // 监听 props.storyboards 变化（拆解新剧本时覆盖本地缓存）
 watch(() => props.storyboards, (newVal) => {
   if (newVal && newVal.length > 0) {
-    // 清除旧缓存，使用新数据
-    localStorage.removeItem('manju_local_storyboards')
     isInitializingFromProps = true
     localStoryboards.value = newVal.map(s => ({
       id: generateId(),
@@ -339,7 +348,7 @@ watch(() => props.storyboards, (newVal) => {
 }, { deep: true })
 
 // 添加分镜
-const addStoryboard = () => {
+const addStoryboard = async () => { 
   localStoryboards.value.push({
     id: generateId(),
     description: '',
@@ -351,10 +360,9 @@ const addStoryboard = () => {
     videoPrompt: '',
     videoUrl: ''
   })
-  setTimeout(() => {
-    const lastCard = document.querySelector('.storyboard-card:last-child')
-    lastCard?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, 100)
+  await nextTick()   // 等 Vue 更新 DOM，不再猜测 100ms  
+  const lastCard = document.querySelector('.storyboard-card:last-child')  
+  lastCard?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 // 删除分镜
@@ -370,7 +378,6 @@ const handleSceneUpload = (index, options) => {
   const blobUrl = URL.createObjectURL(file)
   localStoryboards.value[index].sceneImageUrl = blobUrl
   ElMessage.success('场景图已临时加载，刷新后失效')
-  refreshPoints()
 }
 
 /**
@@ -537,53 +544,40 @@ const generateVideo = async (index) => {
       // 轮询：每15秒查询一次，最多80次（约20分钟）
       let pollCount = 0
       const MAX_POLL_COUNT = 80
-      // 存储interval引用，用于组件卸载时清理
-      pollIntervals[index] = setInterval(async () => {
-        pollCount++
-        if (pollCount >= MAX_POLL_COUNT) {
-          clearInterval(pollIntervals[index])
-          delete pollIntervals[index]
-          videoLoading.value[index] = false
-          ElMessage.error('视频生成超时，请稍后重试')
-          return
-        }
-        try {
-          const result = await queryVideoTask(taskId)
-          if (result.data.code === 200) {
-            // 11. 获取任务当前状态
-            // PENDING（排队中）→ RUNNING（处理中）→ SUCCEEDED（成功）/ FAILED（失败）
-            const status = result.data.data.status
-            // 12. 状态判断1：任务生成成功
-            if (status === 'SUCCEEDED') {
-              // 12.1 将生成的视频URL赋值给当前分镜（前端页面会自动显示视频）
-              story.videoUrl = result.data.data.videoUrl
-              // 12.2 清除定时器（停止轮询，避免无限查询）
-              clearInterval(pollIntervals[index])
-              delete pollIntervals[index]
-              // 12.3 提示用户生成成功
-              ElMessage.success('视频生成成功')
-              // 12.4 关闭当前分镜的加载状态
-              videoLoading.value[index] = false
-              // 12.5 刷新用户积分（因为生成视频消耗了积分）
-              refreshPoints()
-              refreshRecentHistory?.()
-              // 13. 状态判断2：任务生成失败
-            } else if (status === 'FAILED') {
-              // 13.1 清除定时器
-              clearInterval(pollIntervals[index])
-              delete pollIntervals[index]
-              // 13.2 提示用户失败原因（从后端返回的error字段获取）
-              ElMessage.error('视频生成失败：' + result.data.data.error)
-              // 13.3 关闭当前分镜的加载状态
-              videoLoading.value[index] = false
-            }
-            // 14. 其他状态（如PENDING）：不做处理，继续下一次轮询
-          }
-        } catch (err) {
-          // 15. 轮询过程中出错：打印错误日志（不中断轮询，继续尝试）
-          console.error('轮询出错', err)
-        }
-      }, 15000) // 15000毫秒 = 15秒
+      const poll = async () => {  
+        pollCount++  
+        if (pollCount >= MAX_POLL_COUNT) {  
+          delete pollIntervals[index]  
+          videoLoading.value[index] = false  
+          ElMessage.error('视频生成超时，请稍后重试')  
+          return  
+        }  
+        try {  
+          const result = await queryVideoTask(taskId)  
+          if (result.data.code === 200) {  
+            const status = result.data.data.status  
+            if (status === 'SUCCEEDED') {  
+              story.videoUrl = result.data.data.videoUrl  
+              delete pollIntervals[index]  
+              ElMessage.success('视频生成成功')  
+              videoLoading.value[index] = false  
+              refreshPoints()  
+              refreshRecentHistory?.()  
+              return  // 成功，停止轮询  
+            } else if (status === 'FAILED') {  
+              delete pollIntervals[index]  
+              ElMessage.error('视频生成失败：' + (result.data.data.error || '未知错误'))  
+              videoLoading.value[index] = false  
+              return  // 失败，停止轮询  
+            }  
+          }  
+        } catch (err) {  
+          console.error('轮询出错', err)  
+        }  
+        // PENDING/RUNNING 或请求出错：等上一次完成后再安排下一次  
+        pollIntervals[index] = setTimeout(poll, 15000)  
+      }  
+      pollIntervals[index] = setTimeout(poll, 15000)
     } else {
       // 16. 任务创建失败：提示后端返回的错误信息
       errorMessage.value = res.data.msg || '发起视频生成失败'
@@ -619,12 +613,12 @@ const stopPreview = () => {
 }
 
 // 播放单个视频
-const playPreviewVideo = () => {
-  if (!previewPlayerRef.value) {
-    // 如果播放器还没渲染，等待一下
-    setTimeout(playPreviewVideo, 100)
-    return
-  }
+const playPreviewVideo = () => {  
+  if (isUnmounted) return    
+  if (!previewPlayerRef.value) {  
+    setTimeout(playPreviewVideo, 100)  
+    return  
+  } 
   if (previewIndex >= previewVideoList.length) {
     // 播放完成：重置到第一个视频，暂停，保持弹窗打开
     if (previewVideoList.length > 0) {
