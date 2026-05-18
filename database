@@ -1,0 +1,60 @@
+# 创建用户表
+CREATE TABLE IF NOT EXISTS `user` (
+  `id` int NOT NULL AUTO_INCREMENT COMMENT '用户ID',
+  `username` varchar(50) NOT NULL COMMENT '用户名',
+  `password` varchar(100) NOT NULL COMMENT '用户密码',
+  `points` int NOT NULL DEFAULT '100' COMMENT '用户积分余额',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '用户创建时间',
+  `version` int NOT NULL DEFAULT '0' COMMENT '乐观锁版本号',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_username` (`username`) COMMENT '用户名唯一索引'
+)comment='用户表';
+
+ # 1. 创建工具使用记录表（内部计费日志，不展示给用户，记录每次AI调用的计费结果）
+CREATE TABLE IF NOT EXISTS `usage_log` (
+  `id` int NOT NULL AUTO_INCREMENT COMMENT '记录ID',
+  `user_id` int NOT NULL COMMENT '用户ID',
+  `tool` varchar(50) NOT NULL COMMENT '工具类型',
+  `use_date` DATE NOT NULL DEFAULT (curdate()) COMMENT '调用日期（用于免费额度唯一约束）',
+  `is_free` int NOT NULL DEFAULT '0' COMMENT '是否免费使用：0扣积分 1免费',
+  `points_cost` int NOT NULL DEFAULT '0' COMMENT '本次消耗积分',
+  `call_status` int NOT NULL DEFAULT '1' COMMENT 'AI调用结果：0失败 1成功',
+  `fail_reason` varchar(200) DEFAULT NULL COMMENT '失败原因',
+  PRIMARY KEY (`id`),
+  FOREIGN KEY (`user_id`) REFERENCES `user` (`id`),
+  -- 普通联合索引：加速查询用户今日某工具的使用记录
+  INDEX `idx_user_tool_date` (`user_id`, `tool`, `use_date`)
+) COMMENT = '工具使用记录表';
+-- 2. 创建函数索引（核心！仅限制免费使用每天一次）
+-- 逻辑：当 is_free=1 时，用 (user_id, tool, use_date, 1) 做唯一约束；
+-- 当 is_free=0 时，值为 NULL，NULL 不参与唯一约束，因此可重复插入
+CREATE UNIQUE INDEX `uk_user_tool_date_free_only` 
+ON `usage_log` (
+  `user_id`, 
+  `tool`, 
+  `use_date`, 
+  (CASE WHEN `is_free` = 1 THEN 1 ELSE NULL END)
+);
+
+# 用户历史记录表
+-- 用途：展示给用户的创作历史，记录每次创作的输入、结果和状态
+-- 存储策略：登录用户 user_id 为真实用户ID；未登录用户 user_id=NULL，通过 session_id 追踪
+-- 登录时：UPDATE user_history SET user_id=真实用户ID WHERE session_id=会话ID AND user_id IS NULL
+-- 注意：result_url 仅保留24小时，前端需提示用户及时保存
+CREATE TABLE IF NOT EXISTS `user_history` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+  `user_id` INT COMMENT '用户ID，登录时填入真实ID，未登录时为NULL',
+  `tool` VARCHAR(50) NOT NULL COMMENT '工具类型',
+  `input_preview` VARCHAR(255) COMMENT '用户输入内容缩略（前50字）',
+  `result_text` TEXT COMMENT '文本结果（剧本全文、拆解摘要）',
+  `result_url` VARCHAR(500) COMMENT '图片/视频URL',
+  `status` VARCHAR(20) DEFAULT 'success' COMMENT '状态：pending（生成中）/ success（成功）/ failed（失败）',
+  `task_id` VARCHAR(64) COMMENT '用于视频生成后更新历史记录',
+  `session_id` VARCHAR(128) NULL COMMENT '追踪未登录会话，登录后用于归属合并',
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  -- 索引
+  INDEX `idx_user_time` (`user_id`, `created_at` DESC) COMMENT '按用户和时间倒序查最近记录',
+  INDEX `idx_user_tool` (`user_id`, `tool`) COMMENT '按用户和工具类型筛选',
+  INDEX `idx_task_id` (`task_id`) COMMENT '用于视频任务完成后更新',
+  INDEX `idx_session_id` (`session_id`, `user_id`) COMMENT '用于登录时合并未登录历史'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户历史记录表';
