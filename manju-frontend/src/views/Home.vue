@@ -444,20 +444,27 @@ import ParseWorkspace from './components/ParseWorkspace.vue'
 import CharacterWorkspace from './components/CharacterWorkspace.vue'
 import StoryboardWorkspace from './components/StoryboardWorkspace.vue'
 
+const debounce = (fn, delay) => {  
+  let timer = null  
+  return (...args) => {  
+    clearTimeout(timer)  
+    timer = setTimeout(() => fn(...args), delay)  
+  }  
+}
+
 const router = useRouter()
 
 // 导航方法
 const goToLogin = () => {
-  console.log('goToLogin called, router:', router)
   router.push('/login')
 }
 const goToRegister = () => {
-  console.log('goToRegister called')
   router.push('/register')
 }
 
 // ========== 核心业务逻辑（完全保留） ==========
-const user = JSON.parse(localStorage.getItem('user') || '{}')
+let user = {}  
+try { user = JSON.parse(localStorage.getItem('user') || '{}') } catch {}
 const username = ref(user.username || '')
 const points = ref(0)
 
@@ -668,9 +675,12 @@ const characterImages = ref(loadCharacterImages())
 const styleDeclaration = ref('')
 
 // 自动保存
-watch(characters, (newVal) => saveCharacters(newVal), { deep: true })
-watch(storyboards, (newVal) => saveLocalStoryboards(newVal), { deep: true })
-watch(characterImages, (newVal) => saveCharacterImages(newVal), { deep: true })
+const saveCharactersDebounced = debounce((v) => saveCharacters(v), 500)  
+const saveStoryboardsDebounced = debounce((v) => saveLocalStoryboards(v), 500)  
+const saveCharacterImagesDebounced = debounce((v) => saveCharacterImages(v), 500)  
+watch(characters, saveCharactersDebounced, { deep: true })  
+watch(storyboards, saveStoryboardsDebounced, { deep: true })  
+watch(characterImages, saveCharacterImagesDebounced, { deep: true })
 
 // 积分相关
 const fetchPoints = async () => {
@@ -710,7 +720,6 @@ const handleParsed = (data) => {
   }))
   characterImages.value = {}
   fetchRecentHistory()  // 刷新最近使用记录
-  ElMessage.success('拆解成功！')
 }
 
 const handleCharacterGenerated = ({ name, imageUrl }) => {
@@ -754,7 +763,7 @@ const scrollTo = (id) => {
 // 滚动监听，自动高亮导航（防抖处理）
 let scrollTimeout = null
 const handleScroll = () => {
-  if (scrollTimeout) return
+  clearTimeout(scrollTimeout)   // ← 每次触发都重置，最后一次触发后 50ms 执行
   scrollTimeout = setTimeout(() => {
     const scrollTop = window.scrollY
     // 遍历所有工作区，找到当前滚动到的区域
