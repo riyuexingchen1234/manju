@@ -100,7 +100,7 @@
 </template>
 
 <script setup>
-import { ref, watch, inject, onMounted, onBeforeMount } from 'vue'
+import { ref, watch, inject, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { generateCharacter } from '@/api/character'
 import { Plus } from '@element-plus/icons-vue'
@@ -117,13 +117,14 @@ const localCharacters = ref([])
 let isSyncingFromProps = false  // 防止双向绑定循环
 
 // 同步 props 到本地（外部更新时如拆解剧本）
-watch(() => props.characters, (newVal) => {
-  if (newVal) {
-    isSyncingFromProps = true
-    localCharacters.value = JSON.parse(JSON.stringify(newVal))
-    isSyncingFromProps = false
-  }
-}, { immediate: true })
+watch(() => props.characters, async (newVal) => {  
+  if (newVal) {  
+    isSyncingFromProps = true  
+    localCharacters.value = JSON.parse(JSON.stringify(newVal))  
+    await nextTick()   // 等待 watch(localCharacters) 的回调执行完毕，再重置标志  
+    isSyncingFromProps = false  
+  }  
+}, { immediate: true }) 
 
 // 同步本地变化到父组件（用户编辑时）
 watch(localCharacters, (newVal) => {
