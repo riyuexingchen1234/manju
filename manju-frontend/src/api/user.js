@@ -1,9 +1,9 @@
 import axios from "axios"
 
 // 创建 axios 实例，配置基础 URL，并携带凭证（Cookie）
-const request = axios.create({
-    baseURL: 'http://localhost:8080/api',  //本地配置
-    // baseURL: '/api',  // scnet 配置
+const request = axios.create({  
+    baseURL: '/api',  
+    
 
     timeout: 500000,    //等待AI响应时长
     withCredentials: true   // 关键：允许携带 Cookie
