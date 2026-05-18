@@ -62,10 +62,10 @@
             </el-upload>
             <!-- 生成角色图按钮 -->
             <el-button
-              class="btn-gradient btn-character" 
-              @click="generateCharacterImage(char, idx)"
-              :loading="loadingStates[char.name]"
-              size="small"
+              class="btn-gradient btn-character"   
+              @click="generateCharacterImage(char, idx)"  
+              :loading="loadingStates[idx]"  
+              size="small" 
             >
               生成 10分
             </el-button>
@@ -123,7 +123,7 @@ watch(() => props.characters, (newVal) => {
     localCharacters.value = JSON.parse(JSON.stringify(newVal))
     isSyncingFromProps = false
   }
-}, { immediate: true, deep: true })
+}, { immediate: true })
 
 // 同步本地变化到父组件（用户编辑时）
 watch(localCharacters, (newVal) => {
@@ -166,7 +166,6 @@ const removeCharacter = (index) => {
  * 生成角色形象图片
  * 作用：根据角色名称 + 角色描述提示词，调用后端AI绘图接口生成角色图
  * 生成成功后通知父组件更新页面，并刷新用户积分
- *
  * @param char - 当前角色对象（包含 name 角色名、characterPrompt 角色提示词）
  */
 const generateCharacterImage = async (char, index) => {
@@ -185,8 +184,7 @@ const generateCharacterImage = async (char, index) => {
   }
 
   // 开启当前角色的加载状态（防止重复点击生成按钮）
-  // 使用 char.name 作为 key，保证每个角色独立 loading
-  loadingStates.value[char.name] = true
+  loadingStates.value[index] = true
 
   try {
     // 调用后端接口：传入角色名 + 角色提示词 + 风格声明，请求AI生成图片
@@ -223,7 +221,7 @@ const generateCharacterImage = async (char, index) => {
     showErrorModal.value = true
   } finally {
     // 无论成功/失败，最终都会关闭当前角色的加载状态
-    loadingStates.value[char.name] = false
+    loadingStates.value[index] = false
   }
 }
 
@@ -238,7 +236,6 @@ const handleCustomUpload = (char, options) => {
   const blobUrl = URL.createObjectURL(file)
   emit('character-generated', { name: char.name, imageUrl: blobUrl })
   ElMessage.success(`角色 ${char.name} 图片已临时加载，刷新后失效`)
-  refreshPoints()
 }
 //  后端真实接口
 // const handleCustomUpload = async (char, options) => {
