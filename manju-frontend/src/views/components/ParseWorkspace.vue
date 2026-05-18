@@ -56,6 +56,7 @@ const parse = async () => {
     const res = await parseScript(script.value)
     if (res.data.code === 200) {
       emit('parsed', res.data.data)
+      script.value = ''   // 新增：成功后清空输入框，防止误操作重复拆解
       ElMessage.success('拆解成功')
       refreshPoints()
     } else {
