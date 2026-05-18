@@ -123,11 +123,22 @@ import { generateScript } from '@/api/script'
 import { ElMessage } from 'element-plus'
 import { loadScriptMessages, saveScriptMessages } from '@/utils/storage'
 
+const debounce = (fn, delay) => {  
+  let timer = null  
+  return (...args) => {  
+    clearTimeout(timer)  
+    timer = setTimeout(() => fn(...args), delay)  
+  }  
+}
+
 // 从 localStorage 加载历史消息
 const messages = ref(loadScriptMessages())
 
 // 监听消息变化自动保存
-watch(messages, (newVal) => saveScriptMessages(newVal), { deep: true })
+const saveMessagesDebounced = debounce((val) => saveScriptMessages(val), 300)  
+watch(messages, (newVal) => {  
+  saveMessagesDebounced(newVal)  
+}, { deep: true })
 
 // 输入框相关
 const prompt = ref('')
@@ -236,9 +247,8 @@ const regenerate = async (idx) => {
   // idx 是 assistant 消息的索引
   const assistantIndex = idx
   
-  // 删除该 assistant 消息
-  messages.value.splice(assistantIndex, 1)
-
+  // 删除该 assistant 消息及其之后的所有消息
+  messages.value.splice(assistantIndex)
   loading.value = true
 
   try {
