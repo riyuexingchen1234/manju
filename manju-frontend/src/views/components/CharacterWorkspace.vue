@@ -240,12 +240,16 @@ const uploadImage = (char, options) => {
     ElMessage.error('请上传图片文件')
     return
   }
+  
+  if (!char.name.trim()) {
+    ElMessage.warning('请先输入角色名')
+    return
+  }
 
   // 转为 base64 或 object URL
   const reader = new FileReader()
   reader.onload = (e) => {
     const imageUrl = e.target.result
-    // 通知 Home.vue 更新
     emit('character-generated', char.name, imageUrl)
     ElMessage.success('上传成功')
   }
