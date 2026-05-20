@@ -56,14 +56,14 @@
             <el-upload
               class="upload-btn"
               :show-file-list="false"
-              :http-request="(options) => handleCustomUpload(char, options)"
+              :http-request="(options) => uploadImage(char, options)"
             >
               <el-button size="small" type="default">本地上传</el-button>
             </el-upload>
             <!-- 生成角色图按钮 -->
             <el-button
               class="btn-gradient btn-character"   
-              @click="generateCharacterImage(char, idx)"  
+              @click="generateImage(char, idx)"  
               :loading="loadingStates[idx]"  
               size="small" 
             >
@@ -100,164 +100,166 @@
 </template>
 
 <script setup>
-import { ref, watch, inject, onMounted, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { generateCharacter } from '@/api/character'
+import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 
+// ========== Props ==========
 const props = defineProps({
-  characters: Array,    // 从父组件接收角色列表
-  characterImages: Object,
-  styleDeclaration: { type: String, default: '' },  // 全局风格声明
+  characters: {
+    type: Array,
+    default: () => []
+  },
+  characterImages: {
+    type: Object,
+    default: () => ({})
+  },
+  styleDeclaration: {
+    type: String,
+    default: ''
+  },
+  user: {
+    type: Object,
+    default: () => ({})
+  }
 })
-const emit = defineEmits(['character-generated','update-characters'])
 
-// ========== 本地状态：避免直接修改 props ==========
+// ========== Emits ==========
+const emit = defineEmits(['character-generated', 'update-characters'])
+
+// ========== 响应式数据 ==========
+// 内部维护的角色列表（可编辑名字、提示词）
 const localCharacters = ref([])
-let isSyncingFromProps = false  // 防止双向绑定循环
 
-// 同步 props 到本地（外部更新时如拆解剧本）
-watch(() => props.characters, async (newVal) => {  
-  if (newVal) {  
-    isSyncingFromProps = true  
-    localCharacters.value = JSON.parse(JSON.stringify(newVal))  
-    await nextTick()   // 等待 watch(localCharacters) 的回调执行完毕，再重置标志  
-    isSyncingFromProps = false  
-  }  
-}, { immediate: true }) 
+// 每个卡片的加载状态
+const loadingStates = reactive({})
 
-// 同步本地变化到父组件（用户编辑时）
-watch(localCharacters, (newVal) => {
-  if (!isSyncingFromProps) {
-    emit('update-characters', JSON.parse(JSON.stringify(newVal)))
+// 错误弹窗
+const showErrorModal = ref(false)
+const extractImageUrl = (data) => typeof data === 'string' ? data : data?.imageUrl || data
+const errorMessage = ref('')
+
+// ========== 初始化与同步 ==========
+// 从 props.characters 初始化
+const initFromProps = () => {
+  if (props.characters && props.characters.length > 0) {
+    localCharacters.value = props.characters.map(c => ({
+      name: c.name || '',
+      characterPrompt: c.characterPrompt || ''
+    }))
+  }
+}
+
+onMounted(() => {
+  initFromProps()
+})
+
+// 当 props.characters 引用变化时同步（如拆解后传入新角色列表）
+watch(() => props.characters, (newVal) => {
+  if (newVal && newVal.length > 0) {
+    // 仅当引用变化时更新（避免与内部修改形成循环）
+    const newNames = newVal.map(c => c.name).join(',')
+    const currentNames = localCharacters.value.map(c => c.name).join(',')
+    if (newNames !== currentNames) {
+      localCharacters.value = newVal.map(c => ({
+        name: c.name || '',
+        characterPrompt: c.characterPrompt || ''
+      }))
+    }
   }
 }, { deep: true })
 
-// ========== 组件挂载时确保至少有一个角色 ==========
-onMounted(() => {
-  if (!localCharacters.value || localCharacters.value.length === 0) {
-    localCharacters.value = [{ name: '', characterPrompt: '' }]
-    emit('update-characters', localCharacters.value)
-  }
-})
+// 当 localCharacters 变更时通知 Home.vue
+watch(localCharacters, (newVal) => {
+  emit('update-characters', newVal.map(c => ({
+    name: c.name,
+    characterPrompt: c.characterPrompt
+  })))
+}, { deep: true })
 
-const refreshPoints = inject('refreshPoints')
-// 加载状态
-const loadingStates = ref({})
-// 失败弹窗相关变量
-const showErrorModal = ref(false)
-const errorMessage = ref('')
+// ========== 方法 ==========
 
 // 添加新角色
 const addCharacter = () => {
-  const newName = `新角色${localCharacters.value.length + 1}`
-  localCharacters.value.push({ name: newName, characterPrompt: '' })
+  localCharacters.value.push({
+    name: '',
+    characterPrompt: ''
+  })
 }
 
 // 删除角色
-const removeCharacter = (index) => {
-  localCharacters.value.splice(index, 1)
-  if (localCharacters.value.length === 0) {
-    // 保持至少一个空白角色卡片
-    localCharacters.value.push({ name: '', characterPrompt: '' })
-  }
+const removeCharacter = (idx) => {
+  localCharacters.value.splice(idx, 1)
 }
 
-/**
- * 生成角色形象图片
- * 作用：根据角色名称 + 角色描述提示词，调用后端AI绘图接口生成角色图
- * 生成成功后通知父组件更新页面，并刷新用户积分
- * @param char - 当前角色对象（包含 name 角色名、characterPrompt 角色提示词）
- */
-const generateCharacterImage = async (char, index) => {
-  // 前端校验1：角色名称不能为空
-  if (!char.name.trim()) {
-    errorMessage.value = '请输入角色名'
-    showErrorModal.value = true
-    return
-  }
-
-  // 前端校验2：角色提示词不能为空（AI绘图必须有描述）
+// 生成角色图
+const generateImage = async (char, idx) => {
   if (!char.characterPrompt.trim()) {
-    errorMessage.value = '请输入角色提示词'
-    showErrorModal.value = true
+    ElMessage.warning('请先输入角色提示词')
     return
   }
 
-  // 开启当前角色的加载状态（防止重复点击生成按钮）
-  loadingStates.value[index] = true
+  if (!char.name.trim()) {
+    ElMessage.warning('请先输入角色名')
+    return
+  }
 
+  loadingStates[idx] = true
   try {
-    // 调用后端接口：传入角色名 + 角色提示词 + 风格声明，请求AI生成图片
-    const res = await generateCharacter(char.name, char.characterPrompt, props.styleDeclaration)
-
-    // 判断后端返回状态：200 表示生成成功
+    const res = await generateCharacter(
+      char.name,
+      char.characterPrompt,
+      props.styleDeclaration || ''
+    )
     if (res.data.code === 200) {
-      // 获取返回的图片地址
-      let imageUrl = res.data.data
+      const imageUrl = extractImageUrl(res.data.data)
 
-      // 兼容返回格式：
-      // 如果返回的是对象 { imageUrl: "xxx" }，则取出 imageUrl
-      // 如果直接返回字符串，则直接使用
-      if (typeof imageUrl === 'object' && imageUrl.imageUrl !== undefined) {
-        imageUrl = imageUrl.imageUrl
-      }
-
-      // 向父组件抛出事件：传递角色名 + 生成好的图片地址
-      emit('character-generated', { name: char.name, imageUrl })
-
-      // 提示用户生成成功
-      ElMessage.success(`角色 ${char.name} 角色图生成成功`)
-
-      // 刷新用户积分（生成图片消耗积分）
-      refreshPoints()
+      // 通知 Home.vue 更新 characterImages 映射
+      emit('character-generated', char.name, imageUrl)
+      ElMessage.success('角色图生成成功')
     } else {
-      // 后端返回失败：提示错误信息
-      errorMessage.value = res.data.msg || '生成失败，请稍后重试'
-      showErrorModal.value = true
+      showError(res.data.msg || '生成失败')
     }
   } catch (err) {
-    // 网络异常 / 请求失败：弹出强制弹窗
-    errorMessage.value = '生成失败，请检查网络后重试'
-    showErrorModal.value = true
+    const msg = err?.response?.data?.msg || err.message || '生成失败，请稍后重试'
+    showError(msg)
+    console.error(err)
   } finally {
-    // 无论成功/失败，最终都会关闭当前角色的加载状态
-    loadingStates.value[index] = false
+    loadingStates[idx] = false
   }
 }
 
-// 临时上传处理（生成 blob URL，仅用于演示）
-const handleCustomUpload = (char, options) => {
+// 本地上传角色图
+const uploadImage = (char, options) => {
   const file = options.file
   if (!file) return
-  if (!char.name.trim()) {
-    ElMessage.warning('请先填写角色名')
+
+  // 校验文件类型
+  if (!file.type.startsWith('image/')) {
+    ElMessage.error('请上传图片文件')
     return
   }
-  const blobUrl = URL.createObjectURL(file)
-  emit('character-generated', { name: char.name, imageUrl: blobUrl })
-  ElMessage.success(`角色 ${char.name} 图片已临时加载，刷新后失效`)
-}
-//  后端真实接口
-// const handleCustomUpload = async (char, options) => {
-//   const file = options.file
-//   const formData = new FormData()
-//   formData.append('file', file)
-//   // 假设后端接口为 /api/upload/image
-//   const res = await fetch('/api/upload/image', {
-//     method: 'POST',
-//     body: formData,
-//     headers: { Authorization: 'Bearer ...' }
-//   })
-//   const data = await res.json()
-//   if (data.code === 200) {
-//     emit('character-generated', { name: char.name, imageUrl: data.data.url })
-//     ElMessage.success(`角色 ${char.name} 图片上传成功`)
-//   } else {
-//     ElMessage.error('上传失败')
-//   }
-// }
 
+  // 转为 base64 或 object URL
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const imageUrl = e.target.result
+    // 通知 Home.vue 更新
+    emit('character-generated', char.name, imageUrl)
+    ElMessage.success('上传成功')
+  }
+  reader.onerror = () => {
+    ElMessage.error('上传失败')
+  }
+  reader.readAsDataURL(file)
+}
+
+// 显示错误弹窗
+const showError = (msg) => {
+  errorMessage.value = msg
+  showErrorModal.value = true
+}
 </script>
 
 <style scoped>
