@@ -118,189 +118,152 @@
 </template>
 
 <script setup>
-import { ref, inject, watch, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { generateScript } from '@/api/script'
-import { ElMessage } from 'element-plus'
 import { loadScriptMessages, saveScriptMessages } from '@/utils/storage'
+import { ElMessage } from 'element-plus'
 
-const debounce = (fn, delay) => {  
-  let timer = null  
-  return (...args) => {  
-    clearTimeout(timer)  
-    timer = setTimeout(() => fn(...args), delay)  
-  }  
-}
+// ========== Props ==========
+const props = defineProps({
+  user: {
+    type: Object,
+    default: () => ({})
+  }
+})
 
-// 从 localStorage 加载历史消息
-const messages = ref(loadScriptMessages())
-
-// 监听消息变化自动保存
-const saveMessagesDebounced = debounce((val) => saveScriptMessages(val), 300)  
-watch(messages, (newVal) => {  
-  saveMessagesDebounced(newVal)  
-}, { deep: true })
-
-// 输入框相关
-const prompt = ref('')
-const textareaRef = ref(null)
-const messagesContainer = ref(null)
-
-// 加载状态
-const loading = ref(false)
-
-// 事件
+// ========== Emits ==========
 const emit = defineEmits(['script-generated'])
-const refreshPoints = inject('refreshPoints')
 
-// 错误弹窗
+// ========== 响应式数据 ==========
+const messages = ref([])           // [{ role: 'user'|'assistant', content: '' }]
+const prompt = ref('')             // 输入框内容
+const loading = ref(false)
 const showErrorModal = ref(false)
 const errorMessage = ref('')
 
-/**
- * 自适应调整 textarea 高度
- */
-const adjustTextareaHeight = () => {
-  const textarea = textareaRef.value
-  if (!textarea) return
-  textarea.style.height = 'auto'
-  const newHeight = Math.min(textarea.scrollHeight, 200)
-  textarea.style.height = newHeight + 'px'
+// DOM 引用
+const textareaRef = ref(null)
+const messagesContainer = ref(null)
+
+// ========== 初始化 ==========
+onMounted(() => {
+  messages.value = loadScriptMessages()
+})
+
+// messages 变更时自动保存到 localStorage
+watch(messages, (val) => {
+  saveScriptMessages(val)
+}, { deep: true })
+
+// ========== 方法 ==========
+
+// 发送消息
+const send = async () => {
+  const content = prompt.value.trim()
+  if (!content || loading.value) return
+
+  // 添加用户消息
+  messages.value.push({ role: 'user', content })
+
+  // 清空输入框
+  prompt.value = ''
+  nextTick(() => adjustTextareaHeight())
+
+  // 滚动到底部
+  await nextTick()
+  scrollToBottom()
+
+  loading.value = true
+  try {
+    const res = await generateScript(messages.value)
+    if (res.data.code === 200) {
+      // DeepSeek 返回的可能是字符串或对象，统一取内容
+      const aiContent = typeof res.data.data === 'string'
+        ? res.data.data
+        : res.data.data?.script || res.data.data?.content || JSON.stringify(res.data.data)
+
+      messages.value.push({ role: 'assistant', content: aiContent })
+
+      // 通知 Home.vue（用于历史记录）
+      emit('script-generated', aiContent)
+    } else {
+      showError(res.data.msg || '生成失败')
+    }
+  } catch (err) {
+    const msg = err?.response?.data?.msg || err.message || '网络错误，请稍后重试'
+    showError(msg)
+    console.error(err)
+  } finally {
+    loading.value = false
+    await nextTick()
+    scrollToBottom()
+  }
 }
 
-/**
- * 滚动到底部
- */
-const scrollToBottom = () => {
-  nextTick(() => {
-    const container = messagesContainer.value
-    if (container) {
-      container.scrollTop = container.scrollHeight
+// 重新生成：删除该 AI 及其后的所有消息，基于剩余对话重新生成
+const regenerate = async (idx) => {
+  if (loading.value) return
+  // 删除 idx 及之后的所有消息（包括后续的用户和 AI 消息）
+  messages.value.splice(idx)
+
+  loading.value = true
+  try {
+    const res = await generateScript(messages.value)
+    if (res.data.code === 200) {
+      const aiContent = typeof res.data.data === 'string'
+        ? res.data.data
+        : res.data.data?.script || res.data.data?.content || JSON.stringify(res.data.data)
+
+      messages.value.push({ role: 'assistant', content: aiContent })
+      emit('script-generated', aiContent)
+    } else {
+      showError(res.data.msg || '生成失败')
     }
+  } catch (err) {
+    const msg = err?.response?.data?.msg || err.message || '生成失败，请稍后重试'
+    showError(msg)
+    console.error(err)
+  } finally {
+    loading.value = false
+    await nextTick()
+    scrollToBottom()
+  }
+}
+
+// 复制内容到剪贴板
+const copyContent = (content) => {
+  navigator.clipboard.writeText(content).then(() => {
+    ElMessage.success('已复制')
+  }).catch(() => {
+    ElMessage.error('复制失败')
   })
 }
 
-/**
- * 发送消息 → 生成剧本
- */
-const send = async () => {
-  if (!prompt.value.trim() || loading.value) return
-
-  // 构造用户消息
-  const userMessage = { role: 'user', content: prompt.value }
-  messages.value.push(userMessage)
-
-  // 清空输入框并重置高度
-  prompt.value = ''
-  if (textareaRef.value) {
-    textareaRef.value.style.height = 'auto'
-  }
-
-  // 滚动到底部
-  scrollToBottom()
-
-  // 开启加载状态
-  loading.value = true
-
-  try {
-    const res = await generateScript(messages.value)
-
-    if (res.data.code === 200) {
-      let aiContent = res.data.data
-
-      // 兼容格式：后端返回ScriptGenerateResponse对象，需提取script字段
-      if (typeof aiContent === 'object' && aiContent.script !== undefined) {
-        aiContent = aiContent.script
-      }
-
-      // 构造 AI 回复
-      const assistantMessage = { role: 'assistant', content: aiContent }
-      messages.value.push(assistantMessage)
-
-      // 通知父组件
-      emit('script-generated', aiContent)
-      ElMessage.success('剧本生成成功')
-
-      // 刷新积分
-      refreshPoints()
-    } else {
-      errorMessage.value = res.data.msg || '生成失败，请稍后重试'
-      showErrorModal.value = true
-      messages.value.pop()
-    }
-  } catch (err) {
-    errorMessage.value = '生成失败，请检查网络后重试'
-    showErrorModal.value = true
-    messages.value.pop()
-  } finally {
-    loading.value = false
-    scrollToBottom()
-  }
+// 自适应 textarea 高度
+const adjustTextareaHeight = () => {
+  const el = textareaRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
 }
 
-/**
- * 重新生成指定 AI 消息
- */
-const regenerate = async (idx) => {
-  if (loading.value) return
-
-  // 找到对应的 AI 消息，删除它以及之后的消息
-  // idx 是 assistant 消息的索引
-  const assistantIndex = idx
-  
-  // 删除该 assistant 消息及其之后的所有消息
-  messages.value.splice(assistantIndex)
-  loading.value = true
-
-  try {
-    const res = await generateScript(messages.value)
-
-    if (res.data.code === 200) {
-      let aiContent = res.data.data
-
-      // 兼容格式：后端返回ScriptGenerateResponse对象，需提取script字段
-      if (typeof aiContent === 'object' && aiContent.script !== undefined) {
-        aiContent = aiContent.script
-      }
-
-      const assistantMessage = { role: 'assistant', content: aiContent }
-      messages.value.push(assistantMessage)
-
-      emit('script-generated', aiContent)
-      ElMessage.success('重新生成成功')
-      refreshPoints()
-    } else {
-      errorMessage.value = res.data.msg || '重新生成失败，请稍后重试'
-      showErrorModal.value = true
-    }
-  } catch (err) {
-    errorMessage.value = '重新生成失败，请检查网络后重试'
-    showErrorModal.value = true
-  } finally {
-    loading.value = false
-    scrollToBottom()
-  }
+// 滚动到底部
+const scrollToBottom = () => {
+  const el = messagesContainer.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
 }
 
-/**
- * 复制内容到剪贴板
- */
-const copyContent = async (content) => {
-  try {
-    await navigator.clipboard.writeText(content)
-    ElMessage.success('已复制到剪贴板')
-  } catch (err) {
-    // 降级方案
-    const textarea = document.createElement('textarea')
-    textarea.value = content
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textarea)
-    ElMessage.success('已复制到剪贴板')
-  }
+// 显示错误弹窗（需手动关闭）
+const showError = (msg) => {
+  errorMessage.value = msg
+  showErrorModal.value = true
 }
+
+// 暴露给父组件的方法（可选）
+defineExpose({
+  messages
+})
 </script>
 
 <style scoped>
