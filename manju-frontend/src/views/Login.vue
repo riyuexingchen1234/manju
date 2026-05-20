@@ -30,7 +30,7 @@
 
         <div class="form-options">
           <el-checkbox v-model="rememberMe">记住我</el-checkbox>
-          <el-link type="primary" :underline="false" class="forgot-link" @click="showForgotPassword = true">忘记密码？</el-link>
+          <el-link type="primary" underline="never" class="forgot-link" @click="showForgotPassword = true">忘记密码？</el-link>
         </div>
 
         <el-button
@@ -42,7 +42,7 @@
         </el-button>
 
         <div class="register-tip">
-          还没有账号？<el-link type="primary" :underline="false" @click="$router.push('/register')">立即注册</el-link>
+          还没有账号？<el-link type="primary" underline="never" @click="$router.push('/register')">立即注册</el-link>
         </div>
       </el-form>
     </div>
@@ -60,12 +60,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { login } from '@/api/user'
+import { login, getPoints } from '@/api/user'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
 
-// 表单数据
 const form = ref({
   username: '',
   password: ''
@@ -75,12 +74,28 @@ const loading = ref(false)
 const rememberMe = ref(false)
 const showForgotPassword = ref(false)
 
-// 初始化：如果之前有记住的用户名，自动回填
-onMounted(() => {
+// 初始化：已登录用户自动跳转首页
+onMounted(async () => {
   const savedUser = localStorage.getItem('remember_username')
   if (savedUser) {
     form.value.username = savedUser
     rememberMe.value = true
+  }
+
+  // 检查是否已登录（localStorage 中有 user 且 session 有效）
+  const userStr = localStorage.getItem('user')
+  if (userStr) {
+    try {
+      const res = await getPoints()
+      if (res.data.code === 200) {
+        // session 有效，直接跳转首页
+        router.push('/')
+        return
+      }
+    } catch {
+      // session 无效，清除过期数据，留在登录页
+      localStorage.removeItem('user')
+    }
   }
 })
 
@@ -94,7 +109,6 @@ const handleLogin = async () => {
     return
   }
 
-  // 记住用户名（仅在勾选时）
   if (rememberMe.value) {
     localStorage.setItem('remember_username', form.value.username)
   } else {
@@ -105,9 +119,10 @@ const handleLogin = async () => {
   try {
     const res = await login(form.value.username, form.value.password)
     if (res.data.code === 200) {
-      ElMessage.success('登录成功')
+      // 存储完整用户信息到 localStorage
       localStorage.setItem('user', JSON.stringify(res.data.data))
-      router.push('/home')
+      ElMessage.success('登录成功')
+      router.push('/')
     } else {
       ElMessage.error(res.data.msg)
     }
