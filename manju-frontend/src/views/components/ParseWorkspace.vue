@@ -36,40 +36,95 @@
 </template>
 
 <script setup>
-import { ref, inject } from 'vue'
+import { ref } from 'vue'
 import { parseScript } from '@/api/script'
 import { ElMessage } from 'element-plus'
 
+// ========== Props ==========
+const props = defineProps({
+  user: {
+    type: Object,
+    default: () => ({})
+  }
+})
+
+// ========== Emits ==========
+const emit = defineEmits(['parsed'])
+
+// ========== 响应式数据 ==========
 const script = ref('')
 const loading = ref(false)
-const emit = defineEmits(['parsed'])
-const refreshPoints = inject('refreshPoints')
-
-// 失败弹窗相关变量
 const showErrorModal = ref(false)
 const errorMessage = ref('')
 
+// ========== 方法 ==========
+
+// 拆解剧本
 const parse = async () => {
-  if (!script.value.trim() || loading.value) return  // 防止重复提交
+  const content = script.value.trim()
+  if (!content) {
+    ElMessage.warning('请输入剧本内容')
+    return
+  }
+
+  if (content.length < 50) {
+    ElMessage.warning('剧本内容太短，请至少输入50字')
+    return
+  }
+
   loading.value = true
   try {
-    const res = await parseScript(script.value)
+    const res = await parseScript(content)
     if (res.data.code === 200) {
-      emit('parsed', res.data.data)
-      script.value = ''   // 新增：成功后清空输入框，防止误操作重复拆解
+      const parsedData = res.data.data
+      // parsedData 结构：{ styleDeclaration, characters: [{name, description, characterPrompt}], storyboards: [{description, scenePrompt, detailedDescription, videoPrompt, characters}] }
+      
+      // 为每个 storyboard 补充必要字段
+      const storyboards = (parsedData.storyboards || []).map((sb, index) => ({
+        id: Date.now() + index,       // 生成唯一ID
+        description: sb.description || '',
+        scenePrompt: sb.scenePrompt || '',
+        detailedDescription: sb.detailedDescription || '',
+        videoPrompt: sb.videoPrompt || '',
+        keyframePrompt: sb.detailedDescription || '',  // 关键帧提示词复用详细描述
+        characters: sb.characters || [],
+        sceneImageUrl: '',            // 待生成
+        keyframeImageUrl: '',         // 待生成
+        videoUrl: ''                  // 待生成
+      }))
+
+      // 通知 Home.vue
+      emit('parsed', {
+        characters: parsedData.characters || [],
+        storyboards: storyboards,
+        styleDeclaration: parsedData.styleDeclaration || ''
+      })
+
       ElMessage.success('拆解成功')
-      refreshPoints()
     } else {
-      errorMessage.value = res.data.msg || '拆解失败，请稍后重试'
-      showErrorModal.value = true
+      showError(res.data.msg || '拆解失败')
     }
   } catch (err) {
-    errorMessage.value = '拆解失败，请检查网络后重试'
-    showErrorModal.value = true
+    const msg = err?.response?.data?.msg || err.message || '网络错误，请稍后重试'
+    showError(msg)
+    console.error(err)
   } finally {
     loading.value = false
   }
 }
+
+// 显示错误弹窗（需手动关闭）
+const showError = (msg) => {
+  errorMessage.value = msg
+  showErrorModal.value = true
+}
+
+// 暴露给父组件：允许 Home.vue 通过 ref 设置 script 内容
+defineExpose({
+  setScript: (text) => {
+    script.value = text
+  }
+})
 </script>
 
 <style scoped>
