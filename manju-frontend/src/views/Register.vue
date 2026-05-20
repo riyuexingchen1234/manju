@@ -44,7 +44,7 @@
         </el-button>
 
         <div class="register-tip">
-          已有账号？<el-link type="primary" :underline="false" @click="goLogin">立即登录</el-link>
+          已有账号？<el-link type="primary" underline="never" @click="goLogin">立即登录</el-link>
         </div>
       </el-form>
     </div>
@@ -52,10 +52,10 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { register } from '@/api/user'
+import { register, getPoints } from '@/api/user'
 
 const router = useRouter()
 const formRef = ref()
@@ -90,6 +90,21 @@ const rules = {
   ]
 }
 
+// 初始化：已登录用户自动跳转首页
+onMounted(async () => {
+  const userStr = localStorage.getItem('user')
+  if (userStr) {
+    try {
+      const res = await getPoints()
+      if (res.data.code === 200) {
+        router.push('/')
+      }
+    } catch {
+      localStorage.removeItem('user')
+    }
+  }
+})
+
 const handleRegister = async () => {
   try {
     await formRef.value.validate()
@@ -103,7 +118,7 @@ const handleRegister = async () => {
     if (res.data.code === 200) {
       ElMessage.success('注册成功，请登录')
       setTimeout(() => router.push('/login'), 1500)
-    }else {
+    } else {
       ElMessage.error(res.data.msg || '注册失败')
     }
   } catch (error) {
