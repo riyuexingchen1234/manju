@@ -173,6 +173,7 @@
               :characterImages="characterImages"
               :styleDeclaration="styleDeclaration"
               @update-storyboards="handleStoryboardsUpdate"
+              @generated="handleStoryboardGenerated"
             />
           </div>
         </section>
@@ -619,6 +620,9 @@ const handleCharactersUpdate = (list) => {
 const handleStoryboardsUpdate = (list) => {
   storyboards.value = list
   saveLocalStoryboards(list)
+}
+
+const handleStoryboardGenerated = () => {
   if (user.value.id) {
     loadRecentHistory()
     refreshPoints()
