@@ -19,6 +19,8 @@ public class PaymentService {
     private UserDao userDao;
     @Autowired
     private UsageLogDao logDao;
+    @Autowired
+    private FailLogService failLogService;
 
     /**
      * 处理工具调用的支付逻辑（同步AI：先扣后调，失败退还）
@@ -91,15 +93,7 @@ public class PaymentService {
     }
 
     // 独立事务记录失败日志（使用 REQUIRES_NEW 并降低隔离级别，避免锁等待）
-    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_UNCOMMITTED)
-    public void recordFailLog(int userId, String toolName, String reason) {
-        UsageLog failLog = new UsageLog();
-        failLog.setUserId(userId);
-        failLog.setTool(toolName);
-        failLog.setIsFree(0);
-        failLog.setPointsCost(0);
-        failLog.setCallStatus(0);
-        failLog.setFailReason(reason);
-        logDao.insertAndReturnId(failLog);
+    private void recordFailLog(int userId, String toolName, String reason) {
+        failLogService.record(userId, toolName, reason);
     }
 }
