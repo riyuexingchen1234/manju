@@ -249,7 +249,7 @@ const props = defineProps({
 })
 
 // ========== Emits ==========
-const emit = defineEmits(['update-storyboards'])
+const emit = defineEmits(['update-storyboards', 'generated'])
 
 // ========== 响应式数据 ==========
 const localStoryboards = ref([])
@@ -348,6 +348,7 @@ const generateScene = async (idx) => {
       const url = extractImageUrl(res.data.data)
       story.sceneImageUrl = url
       ElMessage.success('场景图生成成功')
+      emit('generated')
     } else {
       showError(res.data.msg || '生成失败')
     }
@@ -385,6 +386,7 @@ const generateKeyframe = async (idx) => {
       const url = extractImageUrl(res.data.data)
       story.keyframeImageUrl = url
       ElMessage.success('关键帧生成成功')
+      emit('generated')
     } else {
       showError(res.data.msg || '生成失败')
     }
@@ -463,6 +465,7 @@ const startPolling = (idx, taskId) => {
           localStoryboards.value.splice(idx, 1, updatedStory)
           videoLoading.value[idx] = false
           ElMessage.success('视频生成完成')
+          emit('generated')
         } else if (result.status === 'FAILED') {
           clearInterval(timer)
           delete pollTimers[idx]
