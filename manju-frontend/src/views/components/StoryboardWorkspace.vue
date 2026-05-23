@@ -314,10 +314,9 @@ watch(localStoryboards, (newVal) => {
 
 // 组件卸载时清除所有轮询定时器
 onBeforeUnmount(() => {
-  Object.keys(pollTimers).forEach(idx => {
-    clearInterval(pollTimers[idx])
-    videoLoading.value[idx] = false  // 组件卸载时释放
-    delete pollTimers[idx]
+  Object.keys(pollTimers).forEach(storyId => {
+    clearInterval(pollTimers[storyId])
+    delete pollTimers[storyId]
   })
 })
 
@@ -330,6 +329,16 @@ const addStoryboard = () => {
 
 // 删除分镜
 const removeStoryboard = (idx) => {
+  const story = localStoryboards.value[idx]
+  // 清除该分镜可能正在运行的视频轮询
+  if(story?.id && pollTimers[story.id]){
+    clearInterval(pollTimers[story.id])
+    delete pollTimers[story.id]
+  }
+  // 释放可能残留的 loading 状态
+  if(videoLoading.value[idx] !== undefined){
+    delete videoLoading.value[idx]
+  }
   localStoryboards.value.splice(idx, 1)
 }
 
@@ -402,15 +411,15 @@ const generateKeyframe = async (idx) => {
 // 生成视频（异步）
 const generateVideo = async (idx) => {
   const story = localStoryboards.value[idx]
+  // 清除该分镜可能正在进行的旧轮询和旧视频
+  if (story?.id && pollTimers[story.id]) {
+    clearInterval(pollTimers[story.id])
+    delete pollTimers[story.id]
+  }
 
   if (!story.keyframeImageUrl) {
     ElMessage.warning('请先生成关键帧')
     return
-  }
-  // 清除该分镜可能正在进行的旧轮询和旧视频
-  if (pollTimers[idx]) {
-    clearInterval(pollTimers[idx])
-    delete pollTimers[idx]
   }
   
   videoLoading.value[idx] = true
@@ -437,8 +446,13 @@ const generateVideo = async (idx) => {
 
 // 轮询视频任务结果（每15秒一次，最多80次，即20分钟）
 const startPolling = (idx, taskId) => {
-  if (pollTimers[idx]) {
-    clearInterval(pollTimers[idx])
+  const story = localStoryboards.value[idx]
+  const storyId = story?.id
+  if(!storyId) return
+
+  if (pollTimers[storyId]) {
+    clearInterval(pollTimers[storyId])
+    delete pollTimers[storyId]
   }
 
   let pollCount = 0
@@ -448,7 +462,7 @@ const startPolling = (idx, taskId) => {
     pollCount++
     if (pollCount > MAX_POLL) {
       clearInterval(timer)
-      delete pollTimers[idx]
+      delete pollTimers[storyId]
       videoLoading.value[idx] = false
       showError('视频生成超时，请稍后重试')
       return
@@ -460,15 +474,20 @@ const startPolling = (idx, taskId) => {
         const result = res.data.data
         if (result.status === 'SUCCEEDED') {
           clearInterval(timer)
-          delete pollTimers[idx]
-          const updatedStory = { ...localStoryboards.value[idx], videoUrl: result.videoUrl || result.video_url }
-          localStoryboards.value.splice(idx, 1, updatedStory)
+          delete pollTimers[storyId]
+          // 通过 storyId 找到当前分镜位置（可能因删除/排序而改变）
+          const targetIdx = localStoryboards.value.findIndex(s => s.id === storyId)
+          if (targetIdx !== -1) {
+            const updated = { ...localStoryboards.value[targetIdx], videoUrl: result.videoUrl || result.video_url }
+            localStoryboards.value.splice(targetIdx, 1, updated)
+          }
+
           videoLoading.value[idx] = false
           ElMessage.success('视频生成完成')
           emit('generated')
         } else if (result.status === 'FAILED') {
           clearInterval(timer)
-          delete pollTimers[idx]
+          delete pollTimers[storyId]
           videoLoading.value[idx] = false
           showError(result.error || '视频生成失败')
         }
@@ -476,9 +495,9 @@ const startPolling = (idx, taskId) => {
     } catch (err) {
       console.error('查询视频任务失败:', err)
     }
-  }, 15000)  // 15秒轮询一次
+  }, 15000)
 
-  pollTimers[idx] = timer
+  pollTimers[storyId] = timer
 }
 
 // 本地上传场景图
